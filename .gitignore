@@ -18,9 +18,11 @@
 # Dependency directories (remove the comment below to include it)
 vendor/
 
-# Env & OS
+# Env, OS & Credentials
 .DS_Store
 *.env
+credentials.json
+token.json
 
 # Docker
 .docker
