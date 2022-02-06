@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -74,18 +75,45 @@ func ListFilesAndFolders(client *dropbox.Config, path string) (nodes []Node, err
 	return
 }
 
-func LoadEnv() {
+func Download(client *dropbox.Config, from string, to string) (err error) {
+	fc := files.New(*client)
+	da := files.NewDownloadArg(from)
+	_, src, err := fc.Download(da)
+
+	if err != nil {
+		return err
+	}
+
+	defer src.Close()
+	file, err := os.Create(to)
+
+	if err != nil {
+		return err
+	}
+
+	defer file.Close()
+	_, err = io.Copy(file, src)
+
+	return
+}
+
+func GetRootDir() (rootDir string) {
 	workingDir, err := os.Getwd()
 
 	if err != nil {
-		panic(err.Error())
+		panic("Error to get working directory")
 	}
 
-	rootDir := filepath.Dir(workingDir)
-	err = godotenv.Load(path.Join(rootDir, "../.env"))
+	rootDir = filepath.Dir(workingDir)
+
+	return
+}
+
+func LoadEnv() {
+	err := godotenv.Load(path.Join(GetRootDir(), "../.env"))
 
 	if err != nil {
-		panic(err.Error())
+		panic("Error to load environment variables")
 	}
 }
 
