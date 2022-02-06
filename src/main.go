@@ -1,138 +1,106 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"io/ioutil"
-	"log"
-	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"time"
 
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
-	"google.golang.org/api/drive/v3"
-	"google.golang.org/api/option"
+	"github.com/dropbox/dropbox-sdk-go-unofficial/v6/dropbox"
+	"github.com/dropbox/dropbox-sdk-go-unofficial/v6/dropbox/files"
+	"github.com/joho/godotenv"
 )
 
-/**
- * Get full wd path of specified relative path
- */
-func getFullPath(relativePath string) string {
-	wd, err := os.Getwd()
+var (
+	chunkSize uint64 = 1048576
+)
+
+type Node struct {
+	IsFolder       bool
+	Name           string
+	Size           uint64
+	Rev            string
+	ServerModified time.Time
+}
+
+func NewClient(token string) (client dropbox.Config) {
+	client = dropbox.Config{
+		Token:    token,
+		LogLevel: dropbox.LogOff,
+	}
+
+	return
+}
+
+func ParseFileMetadata(file *files.FileMetadata) (n Node) {
+	n.IsFolder = false
+	n.Name = file.Name
+	n.Size = file.Size
+	n.Rev = file.Rev
+	n.ServerModified = file.ServerModified
+
+	return
+}
+
+func ParseFolderMetadata(folder *files.FolderMetadata) (n Node) {
+	n.IsFolder = true
+	n.Name = folder.Name
+
+	return
+}
+
+func ListFilesAndFolders(client *dropbox.Config, path string) (nodes []Node, err error) {
+	fc := files.New(*client)
+	lfa := files.NewListFolderArg(path)
+	lfr, err := fc.ListFolder(lfa)
+
+	if err != nil {
+		return nil, err
+	}
+
+	for _, v := range lfr.Entries {
+		var n Node
+
+		switch fm := v.(type) {
+		case *files.FileMetadata:
+			n = ParseFileMetadata(fm)
+		case *files.FolderMetadata:
+			n = ParseFolderMetadata(fm)
+		}
+
+		nodes = append(nodes, n)
+	}
+
+	return
+}
+
+func LoadEnv() {
+	workingDir, err := os.Getwd()
 
 	if err != nil {
 		panic(err.Error())
 	}
 
-	rootDir := filepath.Dir(wd)
-
-	return path.Join(rootDir, relativePath)
-}
-
-/**
- * Retrieve a token, saves the token, then returns the generated client.
- * The file token.json stores the user's access and refresh tokens, and is
- * created automatically when the authorization flow completes for the first time.
- */
-func getClient(config *oauth2.Config) *http.Client {
-	tokenFile := getFullPath("../token.json")
-	token, err := tokenFromFile(tokenFile)
+	rootDir := filepath.Dir(workingDir)
+	err = godotenv.Load(path.Join(rootDir, "../.env"))
 
 	if err != nil {
-		token = getTokenFromWeb(config)
-		saveToken(tokenFile, token)
+		panic(err.Error())
 	}
-
-	return config.Client(context.Background(), token)
-}
-
-/**
- * Request a token from the web, then returns the retrieved token.
- */
-func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
-	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
-	fmt.Printf("Go to the following link in your browser then type the "+
-		"authorization code: \n%v\n", authURL)
-
-	var authCode string
-	if _, err := fmt.Scan(&authCode); err != nil {
-		log.Fatalf("Unable to read authorization code %v", err)
-	}
-
-	token, err := config.Exchange(context.TODO(), authCode)
-	if err != nil {
-		log.Fatalf("Unable to retrieve token from web %v", err)
-	}
-	return token
-}
-
-/**
- * Retrieves a token from a local file.
- */
-func tokenFromFile(file string) (*oauth2.Token, error) {
-	f, err := os.Open(file)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	token := &oauth2.Token{}
-	err = json.NewDecoder(f).Decode(token)
-	return token, err
-}
-
-/**
- * Saves a token to a file path.
- */
-func saveToken(path string, token *oauth2.Token) {
-	fmt.Printf("Saving credential file to: %s\n", path)
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		log.Fatalf("Unable to cache oauth token: %v", err)
-	}
-	defer f.Close()
-	json.NewEncoder(f).Encode(token)
 }
 
 func main() {
-	ctx := context.Background()
+	LoadEnv()
 
-	b, err := ioutil.ReadFile(getFullPath("../credentials.json"))
+	client := NewClient(os.Getenv("DROPBOX_AUTH_TOKEN"))
 
-	if err != nil {
-		log.Fatalf("Unable to read client secret file: %v", err)
-	}
-
-	// If modifying these scopes, delete your previously saved token.json.
-	config, err := google.ConfigFromJSON(b, drive.DriveMetadataReadonlyScope)
+	nodes, err := ListFilesAndFolders(&client, "")
 
 	if err != nil {
-		log.Fatalf("Unable to parse client secret file to config: %v", err)
+		println("Error: ", err.Error())
 	}
 
-	client := getClient(config)
-	driveService, err := drive.NewService(ctx, option.WithHTTPClient(client))
-
-	if err != nil {
-		log.Fatalf("Unable to retrieve Drive client: %v", err)
-	}
-
-	filesResponse, err :=
-		driveService.Files.List().PageSize(40).Fields("nextPageToken, files(id, name)").Do()
-
-	if err != nil {
-		log.Fatalf("Unable to retrieve files: %v", err)
-	}
-
-	fmt.Println("Files:")
-
-	if len(filesResponse.Files) == 0 {
-		fmt.Println("No files found.")
-	} else {
-		for _, i := range filesResponse.Files {
-			fmt.Printf("%s (%s)\n", i.Name, i.Id)
-		}
+	for i, n := range nodes {
+		println("Node: ", n.Name, ", Index: ", i)
 	}
 }
