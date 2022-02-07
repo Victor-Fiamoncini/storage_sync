@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/dropbox/dropbox-sdk-go-unofficial/v6/dropbox"
@@ -13,7 +14,8 @@ import (
 )
 
 var (
-	chunkSize uint64 = 1048576
+	downloadsPath      = "../downloads"
+	directorySeparator = filepath.FromSlash("/")
 )
 
 type Node struct {
@@ -51,15 +53,15 @@ func ParseFolderMetadata(folder *files.FolderMetadata) (n Node) {
 }
 
 func ListFilesAndFolders(client *dropbox.Config, path string) (nodes []Node, err error) {
-	fc := files.New(*client)
-	lfa := files.NewListFolderArg(path)
-	lfr, err := fc.ListFolder(lfa)
+	filesClient := files.New(*client)
+	listFolderArg := files.NewListFolderArg(path)
+	listFolderResult, err := filesClient.ListFolder(listFolderArg)
 
 	if err != nil {
 		return nil, err
 	}
 
-	for _, v := range lfr.Entries {
+	for _, v := range listFolderResult.Entries {
 		var n Node
 
 		switch fm := v.(type) {
@@ -76,13 +78,33 @@ func ListFilesAndFolders(client *dropbox.Config, path string) (nodes []Node, err
 }
 
 func Download(client *dropbox.Config, from string, to string) (err error) {
-	fc := files.New(*client)
-	da := files.NewDownloadArg(from)
-	_, src, err := fc.Download(da)
+	filesClient := files.New(*client)
+
+	formattedFrom := strings.ReplaceAll(from, directorySeparator, "/")
+	downloadArg := files.NewDownloadArg(formattedFrom)
+
+	_, src, err := filesClient.Download(downloadArg)
 
 	if err != nil {
-		return err
+		panic(err.Error())
 	}
+
+	folders := strings.Split(to, directorySeparator)
+	folders = folders[:len(folders)-1]
+
+	var pathWithoutFile string
+
+	for _, folder := range folders {
+		pathWithoutFile += directorySeparator + folder
+	}
+
+	err = os.MkdirAll(path.Join(GetRootDir(), pathWithoutFile), os.FileMode(0522))
+
+	if err != nil {
+		panic(err.Error())
+	}
+
+	to = path.Join(GetRootDir(), to)
 
 	defer src.Close()
 	file, err := os.Create(to)
@@ -97,6 +119,44 @@ func Download(client *dropbox.Config, from string, to string) (err error) {
 	return
 }
 
+func WalkAndDownload(client *dropbox.Config, currentPath string, node Node) (err error) {
+	if err == filepath.SkipDir {
+		return nil
+	}
+
+	if node.IsFolder {
+		nestedNodes, err := ListFilesAndFolders(client, currentPath)
+
+		if err != nil {
+			return err
+		}
+
+		if len(nestedNodes) == 0 {
+			return filepath.SkipDir
+		}
+
+		for _, nestedNode := range nestedNodes {
+			pathWithNestedNodeName := currentPath + "/" + nestedNode.Name
+
+			println("WalkAndDownload call with ->", pathWithNestedNodeName)
+
+			WalkAndDownload(client, pathWithNestedNodeName, nestedNode)
+		}
+	} else {
+		println("Download call with ->", currentPath)
+
+		formatedCurrentPath := strings.ReplaceAll(currentPath, "/", directorySeparator)
+
+		err = Download(client, currentPath, path.Join(GetRootDir(), downloadsPath, formatedCurrentPath))
+
+		if err != nil {
+			println("Download error ->", err.Error())
+		}
+	}
+
+	return
+}
+
 func GetRootDir() (rootDir string) {
 	workingDir, err := os.Getwd()
 
@@ -104,13 +164,13 @@ func GetRootDir() (rootDir string) {
 		panic("Error to get working directory")
 	}
 
-	rootDir = filepath.Dir(workingDir)
+	rootDir = workingDir
 
 	return
 }
 
 func LoadEnv() {
-	err := godotenv.Load(path.Join(GetRootDir(), "../.env"))
+	err := godotenv.Load(path.Join(GetRootDir(), ".env"))
 
 	if err != nil {
 		panic("Error to load environment variables")
@@ -121,14 +181,20 @@ func main() {
 	LoadEnv()
 
 	client := NewClient(os.Getenv("DROPBOX_AUTH_TOKEN"))
-
-	nodes, err := ListFilesAndFolders(&client, "")
+	rootNodes, err := ListFilesAndFolders(&client, "")
 
 	if err != nil {
-		println("Error: ", err.Error())
+		println("Error to list files and foldes")
 	}
 
-	for i, n := range nodes {
-		println("Node: ", n.Name, ", Index: ", i)
+	for i, node := range rootNodes {
+		println("Node ->", node.Name, "| Index ->", i)
 	}
+
+	println("-------------------------------------")
+
+	exampleNode := rootNodes[0]
+	exampleNodePath := "/" + exampleNode.Name
+
+	WalkAndDownload(&client, exampleNodePath, exampleNode)
 }

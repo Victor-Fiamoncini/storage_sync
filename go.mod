@@ -12,6 +12,7 @@ require (
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/googleapis/gax-go/v2 v2.1.1 // indirect
 	github.com/joho/godotenv v1.4.0 // indirect
+	github.com/luci/go-render v0.0.0-20160219211803-9a04cc21af0f // indirect
 	github.com/mattn/go-colorable v0.1.9 // indirect
 	github.com/mattn/go-isatty v0.0.14 // indirect
 	go.opencensus.io v0.23.0 // indirect
